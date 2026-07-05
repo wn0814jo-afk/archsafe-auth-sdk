@@ -1,6 +1,6 @@
 {
   "name": "@archsafe/auth-sdk",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "ArchSafe Auth SDK — 모든 ArchSafe 앱의 공통 인증 클라이언트",
   "type": "module",
   "main": "auth-sdk.js",

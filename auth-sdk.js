@@ -18,7 +18,7 @@
  *   const res  = await auth.fetchWithAuth('/api/data');
  */
 
-const SDK_VERSION = '1.0.0';
+const SDK_VERSION = '1.1.0';
 
 /* ── 내부 상수 ──────────────────────────────────────────────── */
 const STORAGE_KEY_USER   = '__archsafe_user__';
@@ -35,6 +35,20 @@ export class AuthExpiredError extends Error {
   constructor(message) {
     super(message);
     this.name = 'AuthExpiredError';
+  }
+}
+
+/**
+ * 인프라 장애 에러 — Worker 다운/네트워크 단절/5xx 시 throw.
+ * "인증되지 않음"과 구분되는 상태이며, 이 에러가 발생해도
+ * login() redirect나 logout()을 트리거하지 않는다 (재시도 가능 상태 유지).
+ * 호출부에서 instanceof AuthUnavailableError로 구분 가능.
+ */
+export class AuthUnavailableError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'AuthUnavailableError';
+    this.retryable = true;
   }
 }
 
@@ -112,13 +126,15 @@ export class AuthSDK {
   /**
    * requireAuth(provider?)
    * 인증 필수 진입점. 미인증이면 login() redirect.
+   * 인프라 장애(AuthUnavailableError)면 redirect하지 않고 그대로 throw —
+   * 호출부가 재시도 UI를 보여줄 수 있도록 함.
    * 앱 최상단에서 호출.
    *
    * @param {'google'|'naver'} [provider='google']
    * @returns {object} user
    */
   async requireAuth(provider = 'google') {
-    const user = await this.getCurrentUser();
+    const user = await this.getCurrentUser(); // AuthUnavailableError는 여기서 그대로 throw되어 전파됨
     if (!user) {
       this.login(provider);
       /* redirect 전 실행 중단 (빈 Promise 반환) */
@@ -184,21 +200,38 @@ export class AuthSDK {
      INTERNAL
   ══════════════════════════════════════════════════════════ */
 
-  /** /auth/me 호출 → user 객체 반환 (실패 시 null) */
+  /**
+   * /auth/me 호출 → user 객체 반환.
+   * - 401 (진짜 미인증)             → null 반환 (throw 안 함)
+   * - network error / 5xx 등 인프라 장애 → AuthUnavailableError throw
+   *   (미인증과 절대 동일 취급하지 않음 — Worker 장애로 인한 강제 로그인 redirect 방지)
+   */
   async _fetchMe() {
+    let res;
     try {
-      const res = await fetch(`${this._base}/auth/me`, {
+      res = await fetch(`${this._base}/auth/me`, {
         credentials: 'include',
       });
-      if (!res.ok) return null;
-      const data = await res.json();
-      /* Auth Worker 응답 계약: { user: { id, email, name, role, ... } } */
-      if (!data || !data.user) return null;
-      this._user = data.user;
-      return this._user;
     } catch (_) {
-      return null;
+      throw new AuthUnavailableError('[AuthSDK] Auth 서버에 연결할 수 없습니다.');
     }
+
+    if (res.status === 401) return null; /* 진짜 미인증 — 유일하게 null을 반환하는 경우 */
+    if (!res.ok) {
+      throw new AuthUnavailableError(`[AuthSDK] Auth 서버 오류 (status ${res.status})`);
+    }
+
+    let data;
+    try {
+      data = await res.json();
+    } catch (_) {
+      throw new AuthUnavailableError('[AuthSDK] Auth 응답 파싱 실패');
+    }
+
+    /* Auth Worker 응답 계약: { user: { id, email, name, role, ... } } */
+    if (!data || !data.user) return null;
+    this._user = data.user;
+    return this._user;
   }
 
   /** Access Token refresh 시도 */
@@ -209,18 +242,25 @@ export class AuthSDK {
     }
 
     this._refreshPromise = (async () => {
+      let res;
       try {
-        const res = await fetch(`${this._base}/auth/refresh`, {
+        res = await fetch(`${this._base}/auth/refresh`, {
           method:      'POST',
           credentials: 'include',
         });
-        if (!res.ok) return false;
-        this._user = null;
-        await this._fetchMe();
-        return true;
       } catch (_) {
-        return false;
+        return false; /* refresh 요청 자체가 인프라 장애로 실패 */
       }
+      if (!res.ok) return false; /* refresh 명시적 거부 (만료 등) */
+
+      this._user = null;
+      try {
+        await this._fetchMe();
+      } catch (_) {
+        /* refresh 자체는 성공 — 직후 /auth/me 재조회의 일시적 실패는
+           refresh 실패로 간주하지 않는다 (다음 호출에서 재조회됨) */
+      }
+      return true;
     })();
 
     try {

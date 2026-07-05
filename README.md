@@ -72,7 +72,7 @@ npm test
 
 `run-tests.mjs`가 `auth-sdk.js`를 ESM으로 직접 import하여 검증합니다 (별도 빌드 산출물 없음 — 단일 소스 유지).
 
-현재 상태: **39/39 PASS**
+현재 상태: **48/48 PASS**
 
 - 생성자 계약
 - login / logout 계약
@@ -82,6 +82,19 @@ npm test
 - concurrent refresh dedup
 - requireAuth (redirect / user 반환)
 - SDK 순수성 (앱 내부 의존성 없음, baseUrl 하드코딩 없음)
+- **failure classification (v1.1)**: 인증 실패(401) vs 인프라 장애(network/5xx) 구분
+
+## Failure Classification (v1.1)
+
+`/auth/me` 응답을 3가지로 명확히 구분합니다. 이 구분이 없으면 Worker 장애 시 정상 세션을 가진 사용자도 강제로 로그인 페이지로 튕깁니다.
+
+| 상황 | 반환/동작 | `requireAuth()` 결과 |
+|---|---|---|
+| `401` (진짜 미인증) | `getCurrentUser()` → `null` | `login()` redirect |
+| network error / `5xx` (인프라 장애) | `getCurrentUser()` → `AuthUnavailableError` throw (`retryable: true`) | redirect 없이 그대로 throw — 호출부가 재시도 UI 표시 |
+| refresh 성공 후 자체 `401` 재확인 실패 | `refreshIfNeeded()` → 정상적으로 `true` 반환 (후속 조회 실패는 refresh 실패로 취급 안 함) | — |
+
+호출부(SafetyOS 등)는 `AuthUnavailableError`를 잡아서 "서버 연결 실패, 재시도" UI를, 그 외 에러는 기존대로 처리하면 됩니다.
 
 ## 버전 관리
 

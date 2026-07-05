@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { AuthSDK, AuthExpiredError } from './auth-sdk.js';
+import { AuthSDK, AuthExpiredError, AuthUnavailableError } from './auth-sdk.js';
 
 let passed = 0, failed = 0;
 function assert(label, cond, msg) {
@@ -202,6 +202,72 @@ async function runAll() {
   await s13c.logout();
   assert('TC-13C: _user purge',           s13c._user===null);
   assert('TC-13C: _refreshPromise purge', s13c._refreshPromise===null);
+
+  /* ── TC-AUTH-14: getCurrentUser — network error는 null이 아니라 throw ── */
+  console.log('\nTC-AUTH-14: getCurrentUser() — network error → AuthUnavailableError (미인증과 구분)');
+  const s14 = new AuthSDK({ baseUrl:'https://auth.archsafe.co.kr' });
+  _mock = async()=>{ throw new TypeError('Failed to fetch'); };
+  try {
+    await s14.getCurrentUser();
+    assert('TC-14: AuthUnavailableError throw', false);
+  } catch(e) {
+    assert('TC-14: AuthUnavailableError 타입', e instanceof AuthUnavailableError);
+    assert('TC-14: retryable 플래그',           e.retryable === true);
+  }
+  assert('TC-14: _user는 null 유지 (미인증으로 오염 안 됨)', s14._user === null);
+
+  /* ── TC-AUTH-15: requireAuth — network error는 login() redirect 하지 않음 ── */
+  console.log('\nTC-AUTH-15: requireAuth() — network error 시 login redirect 금지');
+  const s15 = new AuthSDK({ baseUrl:'https://auth.archsafe.co.kr' });
+  let loginCalled15 = false;
+  s15.login = () => { loginCalled15 = true; };
+  _mock = async()=>{ throw new TypeError('Failed to fetch'); };
+  try {
+    await s15.requireAuth('google');
+    assert('TC-15: AuthUnavailableError propagate', false);
+  } catch(e) {
+    assert('TC-15: AuthUnavailableError 타입', e instanceof AuthUnavailableError);
+  }
+  assert('TC-15: login() 호출 안 됨 (redirect 금지)', loginCalled15 === false);
+
+  /* ── TC-AUTH-16: 401 vs 5xx 구분 — 401만 unauthenticated(null), 5xx는 throw ── */
+  console.log('\nTC-AUTH-16: 401(미인증) vs 5xx(서버 오류) 구분');
+  const s16a = new AuthSDK({ baseUrl:'https://auth.archsafe.co.kr' });
+  _mock = async()=>({ ok:false, status:401 });
+  const user16a = await s16a.getCurrentUser();
+  assert('TC-16A: 401 → null (미인증)', user16a === null);
+
+  const s16b = new AuthSDK({ baseUrl:'https://auth.archsafe.co.kr' });
+  _mock = async()=>({ ok:false, status:503 });
+  try {
+    await s16b.getCurrentUser();
+    assert('TC-16B: 503 → AuthUnavailableError throw', false);
+  } catch(e) {
+    assert('TC-16B: 503 → AuthUnavailableError 타입', e instanceof AuthUnavailableError);
+  }
+
+  /* ── TC-AUTH-17: 장애 복구 후 재시도 시 정상 동작 (오염되지 않음) ── */
+  console.log('\nTC-AUTH-17: 인프라 장애 후 복구 → 재시도 시 정상 인증');
+  const s17 = new AuthSDK({ baseUrl:'https://auth.archsafe.co.kr' });
+  _mock = async()=>{ throw new TypeError('Failed to fetch'); };
+  try { await s17.getCurrentUser(); } catch(_) {}
+  _mock = async url => {
+    if(url.includes('/auth/me')) return {ok:true, json:async()=>({user:{id:'u42'}})};
+  };
+  const user17 = await s17.getCurrentUser();
+  assert('TC-17: 장애 복구 후 정상 인증', !!user17 && user17.id==='u42');
+
+  /* ── TC-AUTH-18: refresh 성공 후 후속 _fetchMe 실패는 refresh 실패로 취급 안 함 ── */
+  console.log('\nTC-AUTH-18: refresh 성공 + 후속 /auth/me 일시 실패 → refresh는 성공으로 처리');
+  const s18 = new AuthSDK({ baseUrl:'https://auth.archsafe.co.kr' });
+  s18._user = {id:'u1'};
+  _mock = async url => {
+    if(url.includes('/auth/refresh')) return {ok:true, json:async()=>({})};
+    if(url.includes('/auth/me'))      throw new TypeError('Failed to fetch'); /* refresh 직후 일시 장애 */
+    return {ok:false,status:401};
+  };
+  const refreshed18 = await s18.refreshIfNeeded();
+  assert('TC-18: refresh 성공 처리 (후속 fetchMe 실패와 무관)', refreshed18 === true);
 
   /* ── 결과 ── */
   console.log('\n══════════════════════════════════════');
