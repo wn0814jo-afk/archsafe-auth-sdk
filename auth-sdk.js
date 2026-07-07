@@ -18,7 +18,7 @@
  *   const res  = await auth.fetchWithAuth('/api/data');
  */
 
-const SDK_VERSION = '1.1.0';
+const SDK_VERSION = '1.2.0';
 
 /* ── 내부 상수 ──────────────────────────────────────────────── */
 const STORAGE_KEY_USER   = '__archsafe_user__';
@@ -125,7 +125,11 @@ export class AuthSDK {
 
   /**
    * requireAuth(provider?)
-   * 인증 필수 진입점. 미인증이면 login() redirect.
+   * 인증 필수 진입점.
+   * getCurrentUser()가 미인증(401)으로 판정해도 곧바로 login() redirect하지 않고,
+   * refresh를 1회 시도한다 — access token(15분)이 자연 만료된 boot-time 케이스에서
+   * refresh token(30일)이 아직 유효하면 재로그인 없이 통과시키기 위함.
+   * (설계 결정: /auth/me는 순수 조회 전용으로 유지 — 갱신은 여기서만 수행)
    * 인프라 장애(AuthUnavailableError)면 redirect하지 않고 그대로 throw —
    * 호출부가 재시도 UI를 보여줄 수 있도록 함.
    * 앱 최상단에서 호출.
@@ -135,12 +139,20 @@ export class AuthSDK {
    */
   async requireAuth(provider = 'google') {
     const user = await this.getCurrentUser(); // AuthUnavailableError는 여기서 그대로 throw되어 전파됨
-    if (!user) {
-      this.login(provider);
-      /* redirect 전 실행 중단 (빈 Promise 반환) */
-      return new Promise(() => {});
+    if (user) return user;
+
+    /* 401(미인증) — refresh 1회 시도 후에도 안 되면 그때 진짜 미인증으로 확정 */
+    let refreshed = false;
+    try {
+      refreshed = await this._refresh();
+    } catch (_) {
+      refreshed = false;
     }
-    return user;
+    if (refreshed && this._user) return this._user;
+
+    this.login(provider);
+    /* redirect 전 실행 중단 (빈 Promise 반환) */
+    return new Promise(() => {});
   }
 
   /**

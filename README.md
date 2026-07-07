@@ -72,7 +72,7 @@ npm test
 
 `run-tests.mjs`가 `auth-sdk.js`를 ESM으로 직접 import하여 검증합니다 (별도 빌드 산출물 없음 — 단일 소스 유지).
 
-현재 상태: **48/48 PASS**
+현재 상태: **50/50 PASS**
 
 - 생성자 계약
 - login / logout 계약
@@ -80,9 +80,23 @@ npm test
 - fetchWithAuth (정상 / 401 refresh / refresh 실패)
 - refresh 1회 제한 (silent loop 방지)
 - concurrent refresh dedup
-- requireAuth (redirect / user 반환)
+- requireAuth (redirect / user 반환 / **access 만료 시 refresh 후 통과, v1.2**)
 - SDK 순수성 (앱 내부 의존성 없음, baseUrl 하드코딩 없음)
-- **failure classification (v1.1)**: 인증 실패(401) vs 인프라 장애(network/5xx) 구분
+- failure classification (v1.1): 인증 실패(401) vs 인프라 장애(network/5xx) 구분
+
+## requireAuth()의 refresh 책임 (v1.2, "A안" 고정)
+
+`/auth/me`는 **순수 조회 전용**이다 — 세션/토큰을 갱신하는 부작용을 갖지 않는다 (GET이 쓰기 작업을 하면 캐싱/로깅/모니터링 가정이 깨지기 때문). 대신 access token(15분) 자연 만료를 재로그인 없이 넘기는 책임은 클라이언트가 진다:
+
+```
+requireAuth()
+  → getCurrentUser() → /auth/me → 401 (access 만료)
+  → this._refresh() 1회 시도 → /auth/refresh 성공 → 내부에서 /auth/me 재조회
+  → 성공 시 user 반환 (login redirect 없음)
+  → 실패 시에만 login() redirect
+```
+
+이 순서 덕분에 "페이지를 20분 뒤 새로고침 → refresh token(30일)은 멀쩡한데 강제 재로그인" 문제가 SDK 레벨에서 해결된다. Worker의 `/auth/me`는 어떤 경우에도 세션을 rotate하지 않는다.
 
 ## Failure Classification (v1.1)
 

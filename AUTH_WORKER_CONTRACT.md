@@ -57,6 +57,10 @@ GET /auth/me  (credentials: include)
 - 🔲 Worker는 `X-ArchSafe-App` 헤더(SDK가 이미 매 요청에 전송 중, `_doFetch` 참조)를 보고 해당 앱에 대한 role만 동적으로 계산해서 응답해야 한다.
 - **request-level consistency**: 하나의 위저드 세션 안에서 스텝 이동 중 권한이 바뀌어 UI가 깜빡이는 걸 막기 위해, SDK의 `_user` 메모리 캐시(짧은 수명, 페이지 세션 한정)를 그대로 신뢰 범위로 삼는다. 즉 **"매 스텝마다 `/auth/me` 재호출" 금지** — 이미 SDK가 `getCurrentUser()`에서 캐시가 있으면 재조회 안 함(`TC-AUTH-03`: "2번째: 캐시 반환"). 권한이 실시간으로 바뀌어야 하는 경우(관리자가 강제로 권한 회수)는 `fetchWithAuth`가 401을 받는 시점에 자연히 갱신되며, 이건 이미 존재하는 refresh 경로를 재사용한다 — 별도 polling 불필요.
 
+### `/auth/me`는 순수 조회 전용이다 (v1.2, "A안" 확정)
+
+`/auth/me`(`GET`)는 **세션/토큰을 절대 갱신하지 않는다** — HTTP `GET`이 쓰기 부작용을 가지면 캐싱/로깅/모니터링이 "이건 안전하게 재호출 가능한 조회"라고 가정하는 것과 충돌한다. access token(15분) 자연 만료를 재로그인 없이 넘기는 책임은 **클라이언트(`AuthSDK.requireAuth()`, v1.2)**가 진다 — `/auth/me` 401 → `_refresh()` 1회 시도 → 실패 시에만 `login()` redirect. 검토했던 대안(B안: Worker가 `/auth/me` 안에서 투명하게 refresh)은 기각됨.
+
 ---
 
 ## 4. Failure Classification (SDK v1.1 기준, 이미 구현됨)

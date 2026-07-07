@@ -269,6 +269,25 @@ async function runAll() {
   const refreshed18 = await s18.refreshIfNeeded();
   assert('TC-18: refresh 성공 처리 (후속 fetchMe 실패와 무관)', refreshed18 === true);
 
+  /* ── TC-AUTH-19: requireAuth — access 만료(401)여도 refresh 성공하면 login 없이 통과 ── */
+  console.log('\nTC-AUTH-19: requireAuth — access 만료(401)여도 refresh 성공 시 재로그인 없이 통과');
+  const s19 = new AuthSDK({ baseUrl:'https://auth.archsafe.co.kr' });
+  let loginCalled19 = false;
+  s19.login = () => { loginCalled19 = true; };
+  let meCallCount19 = 0;
+  _mock = async url => {
+    if (url.includes('/auth/refresh')) return { ok:true, json:async()=>({}) };
+    if (url.includes('/auth/me')) {
+      meCallCount19++;
+      if (meCallCount19 === 1) return { ok:false, status:401 }; /* 최초: access 만료 */
+      return { ok:true, json:async()=>({user:{id:'u77'}}) };    /* refresh 이후 재조회 성공 */
+    }
+    return { ok:false, status:401 };
+  };
+  const user19 = await s19.requireAuth('google');
+  assert('TC-19: user 반환됨 (login redirect 없이)', !!user19 && user19.id === 'u77');
+  assert('TC-19: login() 호출 안 됨',                 loginCalled19 === false);
+
   /* ── 결과 ── */
   console.log('\n══════════════════════════════════════');
   console.log(` 결과: ${passed}개 통과 / ${failed}개 실패`);
