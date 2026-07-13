@@ -1,3 +1,17 @@
+# ⚠️ DEPRECATED — 프로덕션 사용 금지
+
+이 레포는 **프로덕션 인증 시스템이 아닙니다.** 참고/테스트용 구현입니다.
+
+실제 프로덕션 앱은 반드시 아래 URL만 사용해야 합니다:
+
+```
+https://auth.archsafe.co.kr/sdk/auth-client.js
+```
+
+이 레포의 `auth-sdk.js`를 직접 import하거나 vendor(복사)하지 마십시오. 운영 계약(로그인 라우팅, 쿠키명, 응답 스키마 등)과 불일치가 확인된 상태입니다.
+
+Source of Truth: [`arcsafe-auth-gateway`](https://github.com/wn0814jo-afk/arcsafe-auth-gateway)
+
 # ArchSafe Auth SDK
 
 모든 ArchSafe 앱(SafetyOS, Checklist, RISK 등)이 공통으로 사용하는 인증 클라이언트입니다.
